@@ -9,15 +9,15 @@ import torch.multiprocessing as mp
 import numpy as np
 import transformers
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, GPT2Config, AdamW, get_linear_schedule_with_warmup, Conv1D
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 from tqdm import tqdm
 import importlib
 import logging
 import copy
 
-from apex.optimizers import FusedAdam
+# from apex.optimizers import FusedAdam
 from apex import amp
-from apex.fp16_utils import FP16_Optimizer
+# from apex.fp16_utils import FP16_Optimizer
 
 from data.util import *
 from util import *
@@ -34,7 +34,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-devices = '0'
+devices = '6'
 os.environ["CUDA_VISIBLE_DEVICES"] = devices
 
 
@@ -276,7 +276,6 @@ def main():
 
     args = parser.parse_args('test --batch-sizes 1 --seq-lens 1024 '
                              '--add_input --learn_prior --fp16'.split()) # wi.12.proj_vary_beta_cvae
-
     if args.model_type == 'cvae':
         args.learn_prior = True
     else:
@@ -289,8 +288,8 @@ def main():
         print("There are ", torch.cuda.device_count(), " available GPUs!")
         # print('Setting GPUs {}'.format(args.device))
         print('Using GPU devices {}'.format(devices))
-        torch.cuda.set_device(args.gpu)
-        print('Current single GPU: {}'.format(torch.cuda.current_device()))
+        # torch.cuda.set_device(args.gpu)
+        # print('Current single GPU: {}'.format(torch.cuda.current_device()))
     device = torch.device(args.gpu if gpu else "cpu")
 
     # randomness
@@ -302,8 +301,8 @@ def main():
     # logging
     save_folder = os.path.join(args.out_dir, args.experiment)
     os.makedirs(save_folder, exist_ok=True)
-    t_writer = SummaryWriter(os.path.join(save_folder, 'train'), flush_secs=5)
-    v_writer = SummaryWriter(os.path.join(save_folder, 'val'), flush_secs=5)
+    # t_writer = SummaryWriter(os.path.join(save_folder, 'train'), flush_secs=5)
+    # v_writer = SummaryWriter(os.path.join(save_folder, 'val'), flush_secs=5)
     importlib.reload(logging)
     logging.basicConfig(filename=os.path.join(save_folder, 'train.log'),
                         level=logging.INFO, format='%(asctime)s--- %(message)s')
@@ -478,10 +477,10 @@ def main():
         ppl_word = round(math.exp(min(logp_sum / n_words, 100)), 3)
         kl = kl_loss_sum / len(val_loader)
 
-        v_writer.add_scalar('loss', loss_bpe, num_iters)
-        v_writer.add_scalar('ppl_bpe', ppl_bpe, num_iters)
-        v_writer.add_scalar('ppl_word', ppl_word, num_iters)
-        v_writer.add_scalar('kl', kl, num_iters)
+        # v_writer.add_scalar('loss', loss_bpe, num_iters)
+        # v_writer.add_scalar('ppl_bpe', ppl_bpe, num_iters)
+        # v_writer.add_scalar('ppl_word', ppl_word, num_iters)
+        # v_writer.add_scalar('kl', kl, num_iters)
         logging.info('val loss    : %.4f' % loss_bpe)
         logging.info('val ppl_bpe : %.4f' % ppl_bpe)
         logging.info('val ppl_word: %.4f' % ppl_word)
@@ -762,18 +761,18 @@ def main():
 
                 lr = scheduler.get_last_lr()[0]
                 # Log to Tensorboard
-                t_writer.add_scalar('loss', loss, num_iters)
-                t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
-                t_writer.add_scalar('lr', lr, num_iters)
-                t_writer.add_scalar('iter_time', time.time() - st, num_iters)
-                t_writer.add_scalar('kl', kl_loss, num_iters)
-                t_writer.add_scalar('beta', beta, num_iters)
+                # t_writer.add_scalar('loss', loss, num_iters)
+                # t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
+                # t_writer.add_scalar('lr', lr, num_iters)
+                # t_writer.add_scalar('iter_time', time.time() - st, num_iters)
+                # t_writer.add_scalar('kl', kl_loss, num_iters)
+                # t_writer.add_scalar('beta', beta, num_iters)
 
                 if args.model_type == 'ae_vae_fusion':
                     loss, ce_loss, kl_loss = output[0]
                     # Log to Tensorboard
-                    t_writer.add_scalar('ae_loss', loss, num_iters)
-                    t_writer.add_scalar('ae_kl', kl_loss, num_iters)
+                    # t_writer.add_scalar('ae_loss', loss, num_iters)
+                    # t_writer.add_scalar('ae_kl', kl_loss, num_iters)
 
                 st = time.time()
                 end = num_iters >= args.iterations

@@ -37,7 +37,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-devices = '2,1,0'
+devices = '5,6,7'
 os.environ["CUDA_VISIBLE_DEVICES"] = devices
 
 

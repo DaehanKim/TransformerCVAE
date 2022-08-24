@@ -5,17 +5,17 @@ from data.arxiv_dataset import *
 from data.yelp_dataset import *
 import torch
 import torch.utils.data as data
-from torch.utils.data.distributed import DistributedSampler
-from unidecode import unidecode
+# from torch.utils.data.distributed import DistributedSampler
+# from unidecode import unidecode
 import functools
-from rake_nltk import Rake
-import urllib, sys
+# from rake_nltk import Rake
+# import urllib, sys
 import urllib.request
 import json, re
 import numpy as np
 from scipy.spatial.distance import cdist
-from bert_serving.client import BertClient
-from tqdm import trange
+# from bert_serving.client import BertClient
+# from tqdm import trange
 from random import shuffle
 
 
