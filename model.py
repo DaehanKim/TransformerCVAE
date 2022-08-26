@@ -73,7 +73,8 @@ class AverageSelfAttention(nn.Module):
 
         # inputs is a 3D Tensor: batch, len, hidden_size
         # scores is a 2D Tensor: batch, len
-        scores = self.non_linearity(inputs.matmul(self.attention_weights))
+        weighted_sums = torch.einsum("ijk,k->ij", inputs, self.attention_weights)
+        scores = self.non_linearity(weighted_sums)
 
         ##################################################################
         # Step 2 - Masking

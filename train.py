@@ -34,8 +34,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-devices = '6'
-os.environ["CUDA_VISIBLE_DEVICES"] = devices
+
+devices = os.environ["CUDA_VISIBLE_DEVICES"]
+# devices = '6'
+# os.environ["CUDA_VISIBLE_DEVICES"] = devices
 
 
 def compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask, loss_fn, beta):
@@ -55,8 +57,11 @@ def compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens
 
     # Perform masking
     if mask is not None:
+        no_prompt_mask = torch.arange(mask.size(-1), device=x_mask.device) > x_mask.sum(1, keepdims=True)
+        no_prompt_mask = no_prompt_mask.bool()
         mask = mask.type(torch.bool)
         mask = mask.to(device)
+        mask = mask & no_prompt_mask
         logits = logits.masked_select(mask.unsqueeze(-1))
         target_tokens = target_tokens.masked_select(mask)
 
@@ -243,7 +248,7 @@ def main():
     parser.add_argument('--warmup', type=int, default=10000,
                         help="Amount of iterations to warmup, then decay. (-1 for no warmup and decay)")
 
-    parser.add_argument('--batch-sizes', nargs='+', type=int, default=[1],
+    parser.add_argument('--batch-sizes', nargs='+', type=int, default=[128],
                         help='batch size per GPU. Lists the schedule.')
     parser.add_argument('--seq-lens', nargs='+', type=int, default=[1024],
                         help='seq length per sample. Lists the schedule.')
@@ -259,10 +264,10 @@ def main():
     parser.add_argument('--no_gpu', action="store_true")
 
     parser.add_argument('--fp16', action='store_true', help="Train using FP16?")
-    parser.add_argument('--fp16_opt_level', default='O0', type=str, required=False)
+    parser.add_argument('--fp16_opt_level', default='O1', type=str, required=False)
 
     # KL cost annealing, increase beta from beta_0 to 1 in beta_warmup steps
-    parser.add_argument('--beta_0', default=1.00, type=float)
+    parser.add_argument('--beta_0', default=0, type=float)
     parser.add_argument('--beta_warmup', type=int, default=50000)
     # cyc_vae parameters
     parser.add_argument('--cycle', type=int, default=101640)
@@ -271,11 +276,18 @@ def main():
     parser.add_argument('--add_attn', action="store_true")
     parser.add_argument('--add_softmax', action="store_true")
     parser.add_argument('--attn_proj_vary', action="store_true")
+    parser.add_argument('--wandb_pj_name', type=str, default="cvae_story", required=False)
 
     parser.add_argument('--learn_prior', action="store_true")
 
-    args = parser.parse_args('test --batch-sizes 1 --seq-lens 1024 '
-                             '--add_input --learn_prior --fp16'.split()) # wi.12.proj_vary_beta_cvae
+    args = parser.parse_args('wp.testrun --batch-sizes 12 --seq-lens 1024 '
+                             '--add_attn --dataset wp'.split())
+
+    # set wandb logging
+    if args.wandb_pj_name:
+        import wandb
+        wandb.init(entity="lucas01", project=args.wandb_pj_name, name=args.experiment)
+    
     if args.model_type == 'cvae':
         args.learn_prior = True
     else:
@@ -439,34 +451,33 @@ def main():
                     target_tokens = target_tokens.unsqueeze(0)
                 n, l = target_tokens.size()
 
-                text = target_tokens[0, :].tolist()
+                text_batch = target_tokens.tolist()
                 logprob = ce_loss.tolist()
-                assert len(text) == len(logprob)
+                
+                logp_sum += sum(logprob)
+                kl_loss_sum += kl_loss.item()
 
                 # only for story
-                idx = text.index(endoftext)
-                text = text[idx + 1:]
-                logprob = logprob[idx + 1:]
-
-                if endoftext in text:
+                for text in text_batch:
                     idx = text.index(endoftext)
-                    text = text[:idx]
-                    logprob = logprob[:idx]
+                    text = text[idx + 1:]
+                    # logprob = logprob[idx + 1:]
 
-                logp_sum += sum(logprob)
+                    if endoftext in text:
+                        idx = text.index(endoftext)
+                        text = text[:idx]
+                        # logprob = logprob[:idx]
 
-                n_words_bpe += len(text)
+                    n_words_bpe += len(text)
 
-                story = [tokenizer.decode(target_tokens[i, :]) for i in range(n)]
-                story = [s[s.find("<|endoftext|>") + len("<|endoftext|>"):] for s in story]
-                story = [s[:s.find("<|endoftext|>") + len("<|endoftext|>")] if "<|endoftext|>" in s else s for s in
-                         story]
-                words = sum([len(
-                    [t for t in re.split('("|\'|!|\?|\.|,|:| |\n|’|“|”|;|\(|\)|`)', s) if t != ' ' and t != '']) for
-                    s in story])
-                n_words += words
-
-                kl_loss_sum += kl_loss.item()
+                    story = [tokenizer.decode(target_tokens[i, :]) for i in range(n)]
+                    story = [s[s.find("<|endoftext|>") + len("<|endoftext|>"):] for s in story]
+                    story = [s[:s.find("<|endoftext|>") + len("<|endoftext|>")] if "<|endoftext|>" in s else s for s in
+                            story]
+                    words = sum([len(
+                        [t for t in re.split('("|\'|!|\?|\.|,|:| |\n|’|“|”|;|\(|\)|`)', s) if t != ' ' and t != '']) for
+                        s in story])
+                    n_words += words
 
                 if i > max_val_batches:
                     break
@@ -477,6 +488,11 @@ def main():
         ppl_word = round(math.exp(min(logp_sum / n_words, 100)), 3)
         kl = kl_loss_sum / len(val_loader)
 
+        wandb.log({"valid.num_iters" : num_iters})
+        wandb.log({"valid.loss":loss_bpe})
+        wandb.log({"valid.ppl_bpe":ppl_bpe})
+        wandb.log({"valid.ppl_word":ppl_word})
+        wandb.log({"valid.kl":kl})
         # v_writer.add_scalar('loss', loss_bpe, num_iters)
         # v_writer.add_scalar('ppl_bpe', ppl_bpe, num_iters)
         # v_writer.add_scalar('ppl_word', ppl_word, num_iters)
@@ -729,7 +745,7 @@ def main():
         VAE.train()
 
     test_plot(test_loader, num_iters)
-    val_step(val_loader)
+    # val_step(val_loader)
     generate(test_loader, num_iters)
     torch.save(VAE.state_dict(), os.path.join(save_folder, 'model_' + '{:07d}'.format(num_iters) + '.pt'))
 
@@ -761,6 +777,12 @@ def main():
 
                 lr = scheduler.get_last_lr()[0]
                 # Log to Tensorboard
+                wandb.log({"train.loss":loss})
+                wandb.log({"train.ppl":math.exp(min(ce_loss, 10))})
+                wandb.log({"train.lr":lr})
+                wandb.log({"train.iter_time":time.time() - st})
+                wandb.log({"train.kl":kl_loss})
+                wandb.log({"train.beta":beta})
                 # t_writer.add_scalar('loss', loss, num_iters)
                 # t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
                 # t_writer.add_scalar('lr', lr, num_iters)
@@ -771,6 +793,8 @@ def main():
                 if args.model_type == 'ae_vae_fusion':
                     loss, ce_loss, kl_loss = output[0]
                     # Log to Tensorboard
+                    wandb.log({"train.ae_loss":loss})
+                    wandb.log({"train.ae_kl":kl_loss})
                     # t_writer.add_scalar('ae_loss', loss, num_iters)
                     # t_writer.add_scalar('ae_kl', kl_loss, num_iters)
 

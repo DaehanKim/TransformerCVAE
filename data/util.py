@@ -503,7 +503,7 @@ def prepare_dataset(data_dir, dataset_name, tokenizer, train_bsz, train_seq_len,
         test_collate_fn = collate_fn
 
         print('Loading wikiplot dataset...')
-        data_plots = os.path.join(data_dir, 'wikiPlots/plots_paragraph')
+        data_plots = os.path.join(data_dir, 'wikiPlots/plots')
         data_titles = os.path.join(data_dir, 'wikiPlots/titles')
         with open(data_plots, errors='ignore') as fp:
             plots = fp.readlines()
