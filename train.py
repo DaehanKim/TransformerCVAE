@@ -280,7 +280,7 @@ def main():
 
     parser.add_argument('--learn_prior', action="store_true")
 
-    args = parser.parse_args('wp.testrun --batch-sizes 12 --seq-lens 1024 '
+    args = parser.parse_args('wp.testrun --batch-sizes 7 --seq-lens 1024 '
                              '--add_attn --dataset wp'.split())
 
     # set wandb logging
@@ -391,7 +391,7 @@ def main():
         args.data_dir, args.dataset, tokenizer,
         batch_schedule[cur_b_schedule][0], batch_schedule[cur_b_schedule][1],
         batch_schedule[-1][0], batch_schedule[-1][1],
-        batch_schedule[-1][0], batch_schedule[-1][1],
+        1, batch_schedule[-1][1],
         make_test=True,
         num_workers=args.workers, data_type=args.data_type
     )
@@ -744,7 +744,7 @@ def main():
 
         VAE.train()
 
-    test_plot(test_loader, num_iters)
+    # test_plot(test_loader, num_iters)
     # val_step(val_loader)
     generate(test_loader, num_iters)
     torch.save(VAE.state_dict(), os.path.join(save_folder, 'model_' + '{:07d}'.format(num_iters) + '.pt'))

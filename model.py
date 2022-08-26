@@ -157,8 +157,8 @@ class Cond_Attention(Attention):
         value = self.split_heads(value)
         if layer_past is not None:
             past_key, past_value = layer_past[0].transpose(-2, -1), layer_past[1]  # transpose back cf below
-            key = torch.cat((past_key, key), dim=-1)
-            value = torch.cat((past_value, value), dim=-2)
+            key = torch.cat((past_key, key.permute([3,1,2,0])), dim=-1)
+            value = torch.cat((past_value, value.permute([2,1,0,3])), dim=-2)
         present = torch.stack((key.transpose(-2, -1), value))  # transpose to have same shapes for stacking
 
         z_conv = self.c_z(z)
