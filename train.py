@@ -33,6 +33,7 @@ from sklearn.manifold import TSNE
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+# from custom_optimizer import Adafactor
 
 
 devices = os.environ["CUDA_VISIBLE_DEVICES"]
@@ -238,7 +239,7 @@ def main():
     parser.add_argument('experiment', type=str)
 
     # Default parameters are set based on single GPU training
-    parser.add_argument('--lr', type=float, default=5e-5)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument('--data_type', type=str, default='t1', choices=['t' + str(i) for i in range(9)], help="t: type")
@@ -280,7 +281,7 @@ def main():
 
     parser.add_argument('--learn_prior', action="store_true")
 
-    args = parser.parse_args('wp.firstrun --batch-sizes 12 --seq-lens 1024 '
+    args = parser.parse_args('wp.debugrun --batch-sizes 8 --seq-lens 1024 '
                              '--add_attn --dataset wp'.split())
 
     # set wandb logging
@@ -371,7 +372,7 @@ def main():
     print('Done.')
 
     # fix pre-trained parameters before certain iterations
-    tuning_all_after_iters = 40000
+    tuning_all_after_iters = 0
     tuning_all = False
     for name, parameter in VAE.named_parameters():
         # print((name, parameter.requires_grad))
@@ -408,7 +409,8 @@ def main():
     VAE = VAE.to(device)
     VAE.train()
 
-    optimizer = AdamW(VAE.parameters(), lr=args.lr, correct_bias=True)
+    optimizer = AdamW(VAE.parameters(), lr = args.lr, correct_bias=True)
+    # lr_schedule = transformers.get_constant_schedule(optimizer)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule)
     VAE, optimizer = amp.initialize(VAE, optimizer, opt_level=args.fp16_opt_level)
 
@@ -746,7 +748,7 @@ def main():
 
     # test_plot(test_loader, num_iters)
     # val_step(val_loader)
-    generate(test_loader, num_iters)
+    # generate(test_loader, num_iters)
     torch.save(VAE.state_dict(), os.path.join(save_folder, 'model_' + '{:07d}'.format(num_iters) + '.pt'))
 
     while num_iters < args.iterations:
@@ -832,7 +834,7 @@ def main():
                         args.data_dir, args.dataset, tokenizer,
                         batch_schedule[cur_b_schedule][0], batch_schedule[cur_b_schedule][1],
                         batch_schedule[-1][0], batch_schedule[-1][1],
-                        batch_schedule[-1][0], batch_schedule[-1][1],
+                        1, batch_schedule[-1][1],
                         make_test=True,
                         num_workers=args.workers, data_type=args.data_type
                     )

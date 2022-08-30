@@ -9,7 +9,7 @@ import torch.multiprocessing as mp
 import numpy as np
 import transformers
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, GPT2Config, AdamW, get_linear_schedule_with_warmup, Conv1D
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 from tqdm import tqdm
 import importlib
 import logging
@@ -36,9 +36,10 @@ from sklearn.manifold import TSNE
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import wandb
+# from custom_optimizer import Adafactor
 
-devices = '5,6,7'
-os.environ["CUDA_VISIBLE_DEVICES"] = devices
+devices = os.environ["CUDA_VISIBLE_DEVICES"] 
 
 
 def compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask, loss_fn, beta):
@@ -58,8 +59,11 @@ def compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens
 
     # Perform masking
     if mask is not None:
+        # no_prompt_mask = torch.arange(mask.size(-1), device=x_mask.device) > x_mask.sum(1, keepdims=True)
+        # no_prompt_mask = no_prompt_mask.bool()
         mask = mask.type(torch.bool)
         mask = mask.to(device)
+        # mask = mask & no_prompt_mask
         logits = logits.masked_select(mask.unsqueeze(-1))
         target_tokens = target_tokens.masked_select(mask)
 
@@ -228,6 +232,8 @@ def sample_sequence(model, tokenizer, length, batch_size=None, x_mask=None, x_to
 
 
 def main_worker(gpu, ngpus_per_node, args):
+    # set wandb logging
+
     if args.model_type == 'cvae':
         args.learn_prior = True
     else:
@@ -268,13 +274,17 @@ def main_worker(gpu, ngpus_per_node, args):
             print('Failed to init process group. Retrying...', recon_attempt, e)
             recon_attempt += 1
             time.sleep(10)
-
+    
+    # setup wandb
+    if args.wandb_pj_name and args.rank == 0:
+        wandb.init(entity="lucas01", project=args.wandb_pj_name, name=args.experiment)
+    
     # logging
     if args.rank == 0:
         save_folder = os.path.join(args.out_dir, args.experiment)
         os.makedirs(save_folder, exist_ok=True)
-        t_writer = SummaryWriter(os.path.join(save_folder, 'train'), flush_secs=5)
-        v_writer = SummaryWriter(os.path.join(save_folder, 'val'), flush_secs=5)
+        # t_writer = SummaryWriter(os.path.join(save_folder, 'train'), flush_secs=5)
+        # v_writer = SummaryWriter(os.path.join(save_folder, 'val'), flush_secs=5)
         importlib.reload(logging)
         logging.basicConfig(filename=os.path.join(save_folder, 'train.log'),
                             level=logging.INFO, format='%(asctime)s--- %(message)s')
@@ -351,7 +361,7 @@ def main_worker(gpu, ngpus_per_node, args):
         args.data_dir, args.dataset, tokenizer,
         batch_schedule[cur_b_schedule][0], batch_schedule[cur_b_schedule][1],
         batch_schedule[-1][0], batch_schedule[-1][1],
-        batch_schedule[-1][0], batch_schedule[-1][1],
+        1, batch_schedule[-1][1],
         make_test=True,
         num_workers=args.workers, data_type=args.data_type
     )
@@ -412,34 +422,33 @@ def main_worker(gpu, ngpus_per_node, args):
                     target_tokens = target_tokens.unsqueeze(0)
                 n, l = target_tokens.size()
 
-                text = target_tokens[0, :].tolist()
+                text_batch = target_tokens.tolist()
                 logprob = ce_loss.tolist()
-                assert len(text) == len(logprob)
+                
+                logp_sum += sum(logprob)
+                kl_loss_sum += kl_loss.item()
 
                 # only for story
-                idx = text.index(endoftext)
-                text = text[idx + 1:]
-                logprob = logprob[idx + 1:]
-
-                if endoftext in text:
+                for text in text_batch:
                     idx = text.index(endoftext)
-                    text = text[:idx]
-                    logprob = logprob[:idx]
+                    text = text[idx + 1:]
+                    # logprob = logprob[idx + 1:]
 
-                logp_sum += sum(logprob)
+                    if endoftext in text:
+                        idx = text.index(endoftext)
+                        text = text[:idx]
+                        # logprob = logprob[:idx]
 
-                n_words_bpe += len(text)
+                    n_words_bpe += len(text)
 
-                story = [tokenizer.decode(target_tokens[i, :]) for i in range(n)]
-                story = [s[s.find("<|endoftext|>") + len("<|endoftext|>"):] for s in story]
-                story = [s[:s.find("<|endoftext|>") + len("<|endoftext|>")] if "<|endoftext|>" in s else s for s in
-                         story]
-                words = sum([len(
-                    [t for t in re.split('("|\'|!|\?|\.|,|:| |\n|’|“|”|;|\(|\)|`)', s) if t != ' ' and t != '']) for
-                    s in story])
-                n_words += words
-
-                kl_loss_sum += kl_loss.item()
+                    story = [tokenizer.decode(target_tokens[i, :]) for i in range(n)]
+                    story = [s[s.find("<|endoftext|>") + len("<|endoftext|>"):] for s in story]
+                    story = [s[:s.find("<|endoftext|>") + len("<|endoftext|>")] if "<|endoftext|>" in s else s for s in
+                            story]
+                    words = sum([len(
+                        [t for t in re.split('("|\'|!|\?|\.|,|:| |\n|’|“|”|;|\(|\)|`)', s) if t != ' ' and t != '']) for
+                        s in story])
+                    n_words += words
 
                 if i > max_val_batches:
                     break
@@ -450,10 +459,11 @@ def main_worker(gpu, ngpus_per_node, args):
         ppl_word = round(math.exp(min(logp_sum / n_words, 100)), 3)
         kl = kl_loss_sum / len(val_loader)
 
-        v_writer.add_scalar('loss', loss_bpe, num_iters)
-        v_writer.add_scalar('ppl_bpe', ppl_bpe, num_iters)
-        v_writer.add_scalar('ppl_word', ppl_word, num_iters)
-        v_writer.add_scalar('kl', kl, num_iters)
+        wandb.log({"valid.num_iters" : num_iters})
+        wandb.log({"valid.loss":loss_bpe})
+        wandb.log({"valid.ppl_bpe":ppl_bpe})
+        wandb.log({"valid.ppl_word":ppl_word})
+        wandb.log({"valid.kl":kl})
         logging.info('val loss    : %.4f' % loss_bpe)
         logging.info('val ppl_bpe : %.4f' % ppl_bpe)
         logging.info('val ppl_word: %.4f' % ppl_word)
@@ -702,9 +712,9 @@ def main_worker(gpu, ngpus_per_node, args):
         VAE.train()
 
     if args.rank == 0:
-        test_plot(test_loader, num_iters)
-        val_step(val_loader)
-        generate(test_loader, num_iters)
+        # test_plot(test_loader, num_iters)
+        # val_step(val_loader)
+        # generate(test_loader, num_iters)
         torch.save(VAE.state_dict(), os.path.join(save_folder, 'model_' + '{:07d}'.format(num_iters) + '.pt'))
 
     while num_iters < args.iterations:
@@ -720,7 +730,7 @@ def main_worker(gpu, ngpus_per_node, args):
         with tqdm(total=len(train_loader)) as pbar:
             for i, (x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask) in enumerate(train_loader):
 
-                if num_iters % args.cycle >= args.cycle - args.beta_warmup - 25000:
+                if num_iters % args.cycle >= args.cycle - args.beta_warmup:
                     beta = min(1.0, beta + (1. - args.beta_0) / args.beta_warmup)
 
                 if not tuning_all and num_iters >= tuning_all_after_iters:
@@ -733,21 +743,30 @@ def main_worker(gpu, ngpus_per_node, args):
                                     input_tokens, target_tokens, mask, loss_fn, beta, args.model_type)
 
                 if args.rank == 0:
+                    # print(f"This process has rank {args.rank}")
                     loss, ce_loss, kl_loss = output[-1]
                     lr = scheduler.get_last_lr()[0]
                     # Log to Tensorboard
-                    t_writer.add_scalar('loss', loss, num_iters)
-                    t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
-                    t_writer.add_scalar('lr', lr, num_iters)
-                    t_writer.add_scalar('iter_time', time.time() - st, num_iters)
-                    t_writer.add_scalar('kl', kl_loss, num_iters)
-                    t_writer.add_scalar('beta', beta, num_iters)
+                    wandb.log({"train.loss":loss})
+                    wandb.log({"train.ppl":math.exp(min(ce_loss, 10))})
+                    wandb.log({"train.lr":lr})
+                    wandb.log({"train.iter_time":time.time() - st})
+                    wandb.log({"train.kl":kl_loss})
+                    wandb.log({"train.beta":beta})
+                    # t_writer.add_scalar('loss', loss, num_iters)
+                    # t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
+                    # t_writer.add_scalar('lr', lr, num_iters)
+                    # t_writer.add_scalar('iter_time', time.time() - st, num_iters)
+                    # t_writer.add_scalar('kl', kl_loss, num_iters)
+                    # t_writer.add_scalar('beta', beta, num_iters)
 
                     if args.model_type == 'ae_vae_fusion':
                         loss, ce_loss, kl_loss = output[0]
                         # Log to Tensorboard
-                        t_writer.add_scalar('ae_loss', loss, num_iters)
-                        t_writer.add_scalar('ae_kl', kl_loss, num_iters)
+                        wandb.log({"train.ae_loss":loss})
+                        wandb.log({"train.ae_kl":kl_loss})
+                        # t_writer.add_scalar('ae_loss', loss, num_iters)
+                        # t_writer.add_scalar('ae_kl', kl_loss, num_iters)
 
                 st = time.time()
                 end = num_iters >= args.iterations
@@ -783,7 +802,7 @@ def main_worker(gpu, ngpus_per_node, args):
                         args.data_dir, args.dataset, tokenizer,
                         batch_schedule[cur_b_schedule][0], batch_schedule[cur_b_schedule][1],
                         batch_schedule[-1][0], batch_schedule[-1][1],
-                        batch_schedule[-1][0], batch_schedule[-1][1],
+                        1, batch_schedule[-1][1],
                         make_test=True,
                         num_workers=args.workers, data_type=args.data_type
                     )
@@ -802,7 +821,7 @@ if __name__ == "__main__":
     parser.add_argument('experiment', type=str)
 
     # Default parameters are set based on single GPU training
-    parser.add_argument('--lr', type=float, default=5e-5)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument('--data_type', type=str, default='t1', choices=['t' + str(i) for i in range(9)], help="t: type")
@@ -834,10 +853,10 @@ if __name__ == "__main__":
                         help='number of data loading workers')
 
     parser.add_argument('--fp16', action='store_true', help="Train using FP16?")
-    parser.add_argument('--fp16_opt_level', default='O0', type=str, required=False)
+    parser.add_argument('--fp16_opt_level', default='O1', type=str, required=False)
 
     # KL cost annealing, increase beta from beta_0 to 1 in beta_warmup steps
-    parser.add_argument('--beta_0', default=0.01, type=float)
+    parser.add_argument('--beta_0', default=0.00, type=float)
     parser.add_argument('--beta_warmup', type=int, default=25000)
     # cyc_vae parameters
     parser.add_argument('--cycle', type=int, default=101640)
@@ -846,11 +865,14 @@ if __name__ == "__main__":
     parser.add_argument('--add_attn', action="store_true")
     parser.add_argument('--add_softmax', action="store_true")
     parser.add_argument('--attn_proj_vary', action="store_true")
+    parser.add_argument('--wandb_pj_name', type=str, default="cvae_story", required=False)
 
     parser.add_argument('--learn_prior', action="store_true")
 
-    args = parser.parse_args('wi.1.proj_vary_cyc_cvae --batch-sizes 1 --seq-lens 1024 '
-                             ' --add_input --learn_prior --fp16'.split())
+
+    args = parser.parse_args('wp.debugmp --batch-sizes 12 --seq-lens 1024 '
+                             '--add_attn --dataset wp'.split())
+
 
     # Each node is expected to have same number of GPUs
     ngpus_per_node = torch.cuda.device_count()
