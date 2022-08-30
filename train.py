@@ -280,7 +280,7 @@ def main():
 
     parser.add_argument('--learn_prior', action="store_true")
 
-    args = parser.parse_args('wp.testrun --batch-sizes 7 --seq-lens 1024 '
+    args = parser.parse_args('wp.firstrun --batch-sizes 12 --seq-lens 1024 '
                              '--add_attn --dataset wp'.split())
 
     # set wandb logging
