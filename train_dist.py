@@ -363,7 +363,8 @@ def main_worker(gpu, ngpus_per_node, args):
         batch_schedule[-1][0], batch_schedule[-1][1],
         1, batch_schedule[-1][1],
         make_test=True,
-        num_workers=args.workers, data_type=args.data_type
+        num_workers=args.workers, data_type=args.data_type,
+        local_rank = args.rank
     )
     print('Done.')
 
@@ -804,7 +805,8 @@ def main_worker(gpu, ngpus_per_node, args):
                         batch_schedule[-1][0], batch_schedule[-1][1],
                         1, batch_schedule[-1][1],
                         make_test=True,
-                        num_workers=args.workers, data_type=args.data_type
+                        num_workers=args.workers, data_type=args.data_type,
+                        local_rank = args.rank
                     )
         if not end:
             e += 1
@@ -870,7 +872,7 @@ if __name__ == "__main__":
     parser.add_argument('--learn_prior', action="store_true")
 
 
-    args = parser.parse_args('wp.debugmp --batch-sizes 12 --seq-lens 1024 '
+    args = parser.parse_args('wp.debugmp --batch-sizes 8 --seq-lens 1024 '
                              '--add_attn --dataset wp'.split())
 
 

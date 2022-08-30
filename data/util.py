@@ -5,7 +5,7 @@ from data.arxiv_dataset import *
 from data.yelp_dataset import *
 import torch
 import torch.utils.data as data
-# from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data.distributed import DistributedSampler
 # from unidecode import unidecode
 import functools
 # from rake_nltk import Rake
@@ -440,7 +440,7 @@ def collate_fn(samples):
 
 
 def prepare_dataset(data_dir, dataset_name, tokenizer, train_bsz, train_seq_len, val_bsz, val_seq_len, test_bsz=1,
-                    test_seq_len=1024, data_type='t0', num_workers=1, make_train=True, make_val=True, make_test=False):
+                    test_seq_len=1024, data_type='t0', num_workers=1, make_train=True, make_val=True, make_test=False, local_rank=None):
     # data_dir, dataset_name, tokenizer, train_bsz, train_seq_len, val_bsz, val_seq_len, num_workers = args.data_dir, args.dataset, tokenizer, batch_schedule[cur_b_schedule][0], batch_schedule[cur_b_schedule][1], batch_schedule[-1][0], batch_schedule[-1][1], args.workers
 
     loaders = []
@@ -458,8 +458,18 @@ def prepare_dataset(data_dir, dataset_name, tokenizer, train_bsz, train_seq_len,
             if data_type == 't7' or data_type == 't8':
                 d_train = [t for lt in d_train for t in lt]
             print('Train dataset size', len(d_train))
+            sampler = None
+            if local_rank is not None: 
+                print(f"DDP -> using distributed sampler... rank {local_rank}")
+                sampler = DistributedSampler(
+                    d_train,
+                    num_replicas = 2,
+                    rank = local_rank,
+                    shuffle=True
+                )
             loaders.append(data.DataLoader(d_train,
-                                           # sampler=DistributedSampler(d_train) if distributed else None,
+                                            sampler = sampler,
+                                        #    sampler=DistributedSampler(d_train) if distributed else None,
                                            batch_size=train_bsz,
                                            pin_memory=True,
                                            drop_last=True,
