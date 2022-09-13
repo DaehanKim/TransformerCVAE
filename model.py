@@ -20,6 +20,8 @@ from transformers.modeling_bert import gelu
 from transformers.configuration_gpt2 import GPT2Config
 from transformers.file_utils import add_start_docstrings
 
+from util import imq_kernel
+
 
 ####################### auxiliary attention blocks #######################
 class Unmasked_Attention(Attention):
@@ -589,6 +591,28 @@ class VAEModel(GPT2LMHeadModel):
         result = -0.5 * torch.sum(exponential, tuple(range(1, len(exponential.shape))))
         return result.mean()
 
+    def mmd_loss(self, mean1, logvar1, mean2, logvar2, assume_normal = False):
+        '''
+        MMD(maximal mean discrepancy)를 계산한다.
+        assume_normal : prior와 posterior를 가우시안으로 가정하고 샘플링
+        '''
+        device = mean1.device
+        if assume_normal:
+            noise1 = torch.normal(0,1,size=mean1.size()).to(device)
+            noise2 = torch.normal(0,1,size=mean2.size()).to(device)
+            z1 = mean1+torch.exp(0.5*logvar1)*noise1 # reparam trick
+            z2 = mean2+torch.exp(0.5*logvar2)*noise2
+        else:
+            # 이 경우 logvar 부분은 학습되지 않으므로 inference할 때도 mean만 사용해야 함.
+            z1 = mean1 
+            z2 = mean2
+        
+        return imq_kernel(z1, z2, h_dim = z1.size(-1))
+        
+
+
+
+
     def forward(
         self,
         input_ids=None,
@@ -604,7 +628,8 @@ class VAEModel(GPT2LMHeadModel):
         y_mask=None,
         y_tokens=None,
         from_prior=False,
-        from_mean=False
+        from_mean=False,
+        divergence_type = "mmd"
     ):
         # latent representation
         posterior_mean, posterior_logvar = self.encoder(input_ids=y_tokens, attention_mask=y_mask)[:2]
@@ -641,8 +666,15 @@ class VAEModel(GPT2LMHeadModel):
             lm_logits = lm_logits + lm_logits_rep.unsqueeze(dim=1)
         outputs = (lm_logits,) + transformer_outputs[1:]
 
-        # kl_loss
-        kl_loss = self.kl_loss(posterior_mean, posterior_logvar, prior_mean, prior_logvar).unsqueeze(0)
-        outputs = outputs + (kl_loss,)
-
-        return outputs  # lm_logits, presents, (all hidden_states), (attentions), (kl_loss)
+        if divergence_type == "kl":
+            # kl_loss
+            kl_loss = self.kl_loss(posterior_mean, posterior_logvar, prior_mean, prior_logvar).unsqueeze(0)
+            outputs = outputs + (kl_loss,)
+        elif divergence_type == "mmd":
+            # mmd_loss
+            mmd_loss = self.mmd_loss(posterior_mean, posterior_logvar, prior_mean, prior_logvar, assume_normal = True)
+            outputs = outputs + (mmd_loss,)
+        elif divergence_type == "gan":
+            raise NotImplementedError("gan loss not implemented yet")
+        
+        return outputs  # lm_logits, presents, (all hidden_states), (attentions), (divergence term : kl or mmd)

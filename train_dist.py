@@ -15,9 +15,9 @@ import importlib
 import logging
 import copy
 
-from apex.optimizers import FusedAdam
+# from apex.optimizers import FusedAdam
 from apex import amp
-from apex.fp16_utils import FP16_Optimizer
+# from apex.fp16_utils import FP16_Optimizer
 
 from apex.parallel import DistributedDataParallel as DDP
 from torch.nn.parallel import DistributedDataParallel
@@ -54,73 +54,37 @@ def compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens
     outputs = model(input_ids=input_tokens, attention_mask=mask, x_mask=x_mask, x_tokens=x_tokens, y_mask=y_mask,
                     y_tokens=y_tokens)
     logits = outputs[0]
-    kl_loss = outputs[-1]
+    reg_loss = outputs[-1]
     num_logits = logits.size(-1)
 
     # Perform masking
     if mask is not None:
-        # no_prompt_mask = torch.arange(mask.size(-1), device=x_mask.device) > x_mask.sum(1, keepdims=True)
-        # no_prompt_mask = no_prompt_mask.bool()
+        no_prompt_mask = torch.arange(mask.size(-1), device=x_mask.device) > x_mask.sum(1, keepdims=True)
+        no_prompt_mask = no_prompt_mask.bool()
         mask = mask.type(torch.bool)
         mask = mask.to(device)
-        # mask = mask & no_prompt_mask
+        mask = mask & no_prompt_mask
         logits = logits.masked_select(mask.unsqueeze(-1))
         target_tokens = target_tokens.masked_select(mask)
 
     ce_loss = loss_fn(logits.view(-1, num_logits), target_tokens.view(-1))
-    kl_loss = kl_loss.mean()
-    loss = ce_loss.mean() + beta * kl_loss
+    reg_loss = reg_loss.mean()
+    loss = ce_loss.mean() + beta * reg_loss
 
-    return loss, ce_loss, kl_loss
-
-
-def compute_loss_ae(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask, loss_fn, beta):
-    input_tokens = input_tokens.to(device)
-    target_tokens = target_tokens.to(device)
-    mask = mask.to(device)
-    x_mask = x_mask.to(device)
-    x_tokens = x_tokens.to(device)
-
-    outputs = model(input_ids=input_tokens, attention_mask=mask, y_mask=x_mask, y_tokens=x_tokens, from_mean=True, from_prior=False)
-
-    logits = outputs[0]
-    kl_loss = outputs[-1]
-    num_logits = logits.size(-1)
-
-    # Perform masking
-    if mask is not None:
-        mask = mask.type(torch.bool)
-        mask = mask.to(device)
-        logits = logits.masked_select(mask.unsqueeze(-1))
-        target_tokens = target_tokens.masked_select(mask)
-
-    ce_loss = loss_fn(logits.view(-1, num_logits), target_tokens.view(-1))
-    kl_loss = kl_loss.mean()
-    loss = ce_loss.mean()
-
-    return loss, ce_loss, kl_loss
+    return loss, ce_loss, reg_loss
 
 
 def train_step(device, model, optimizer, x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask, loss_fn, beta, model_type):
     output = []
-    if model_type == 'ae_vae_fusion':
-        optimizer.zero_grad()
-        loss, ce_loss, kl_loss = compute_loss_ae(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens,
-                                              target_tokens, mask, loss_fn, beta)
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 5.0)  # max_grad_norm=1.0
-        optimizer.step()
-        output.append((loss.item(), ce_loss.mean().item(), kl_loss.item()))
 
     optimizer.zero_grad()
-    loss, ce_loss, kl_loss = compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens,
+    loss, ce_loss, reg_loss = compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens,
                                           target_tokens, mask, loss_fn, beta)
     with amp.scale_loss(loss, optimizer) as scaled_loss:
         scaled_loss.backward()
         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 5.0)  # max_grad_norm=1.0
     optimizer.step()
-    output.append((loss.item(), ce_loss.mean().item(), kl_loss.item()))
+    output.append((loss.item(), ce_loss.mean().item(), reg_loss.item()))
 
     return output
 
@@ -403,7 +367,7 @@ def main_worker(gpu, ngpus_per_node, args):
         n_words_bpe = 0
         n_words = 0
         logp_sum = 0.0
-        kl_loss_sum = 0.0
+        reg_loss_sum = 0.0
 
         logging.info("Validation loop.         Batches: %d" % len(val_loader))
         logging.info("Validation loop. max_val_batches: %d" % max_val_batches)
@@ -413,10 +377,7 @@ def main_worker(gpu, ngpus_per_node, args):
             for i, (x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask) in enumerate(val_loader):
                 with torch.no_grad():
                     if args.model_type == 'cvae':
-                        loss, ce_loss, kl_loss = compute_loss(device, VAE, x_mask, x_tokens, y_mask, y_tokens,
-                                                              input_tokens, target_tokens, mask, loss_fn, 1.0)
-                    else:
-                        loss, ce_loss, kl_loss = compute_loss_ae(device, VAE, x_mask, x_tokens, y_mask, y_tokens,
+                        loss, ce_loss, reg_loss = compute_loss(device, VAE, x_mask, x_tokens, y_mask, y_tokens,
                                                               input_tokens, target_tokens, mask, loss_fn, 1.0)
 
                 if len(target_tokens.size()) == 1:
@@ -427,17 +388,22 @@ def main_worker(gpu, ngpus_per_node, args):
                 logprob = ce_loss.tolist()
                 
                 logp_sum += sum(logprob)
-                kl_loss_sum += kl_loss.item()
+                reg_loss_sum += reg_loss.item()
 
                 # only for story
                 for text in text_batch:
+                    # 프롬프트 부분 잘라내는 코드
                     idx = text.index(endoftext)
                     text = text[idx + 1:]
                     # logprob = logprob[idx + 1:]
 
+                    # 패딩 잘라내는 코드
                     if endoftext in text:
                         idx = text.index(endoftext)
                         text = text[:idx]
+                    
+                    # nptext = np.array(text)
+                    # start_padding_idx = np.where(nptext == endoftext)[0][1]
                         # logprob = logprob[:idx]
 
                     n_words_bpe += len(text)
@@ -458,17 +424,17 @@ def main_worker(gpu, ngpus_per_node, args):
         loss_bpe = logp_sum / n_words_bpe
         ppl_bpe = round(math.exp(min(logp_sum / n_words_bpe, 100)), 3)
         ppl_word = round(math.exp(min(logp_sum / n_words, 100)), 3)
-        kl = kl_loss_sum / len(val_loader)
+        div = reg_loss_sum / len(val_loader)
 
-        wandb.log({"valid.num_iters" : num_iters})
-        wandb.log({"valid.loss":loss_bpe})
-        wandb.log({"valid.ppl_bpe":ppl_bpe})
-        wandb.log({"valid.ppl_word":ppl_word})
-        wandb.log({"valid.kl":kl})
+        wandb.log({"valid/num_iters" : num_iters})
+        wandb.log({"valid/loss":loss_bpe})
+        wandb.log({"valid/ppl_bpe":ppl_bpe})
+        wandb.log({"valid/ppl_word":ppl_word})
+        wandb.log({"valid/divergence":div})
         logging.info('val loss    : %.4f' % loss_bpe)
         logging.info('val ppl_bpe : %.4f' % ppl_bpe)
         logging.info('val ppl_word: %.4f' % ppl_word)
-        logging.info('val   kl    : %.4f' % kl)
+        logging.info('val   kl    : %.4f' % div)
 
         VAE.train()
 
@@ -745,29 +711,21 @@ def main_worker(gpu, ngpus_per_node, args):
 
                 if args.rank == 0:
                     # print(f"This process has rank {args.rank}")
-                    loss, ce_loss, kl_loss = output[-1]
+                    loss, ce_loss, reg_loss = output[-1]
                     lr = scheduler.get_last_lr()[0]
                     # Log to Tensorboard
-                    wandb.log({"train.loss":loss})
-                    wandb.log({"train.ppl":math.exp(min(ce_loss, 10))})
-                    wandb.log({"train.lr":lr})
-                    wandb.log({"train.iter_time":time.time() - st})
-                    wandb.log({"train.kl":kl_loss})
-                    wandb.log({"train.beta":beta})
+                    wandb.log({"train/loss":loss})
+                    wandb.log({"train/ppl":math.exp(min(ce_loss, 10))})
+                    wandb.log({"train/lr":lr})
+                    wandb.log({"train/iter_time":time.time() - st})
+                    wandb.log({"train/divergence":reg_loss})
+                    wandb.log({"train/beta":beta})
                     # t_writer.add_scalar('loss', loss, num_iters)
                     # t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
                     # t_writer.add_scalar('lr', lr, num_iters)
                     # t_writer.add_scalar('iter_time', time.time() - st, num_iters)
-                    # t_writer.add_scalar('kl', kl_loss, num_iters)
+                    # t_writer.add_scalar('kl', reg_loss, num_iters)
                     # t_writer.add_scalar('beta', beta, num_iters)
-
-                    if args.model_type == 'ae_vae_fusion':
-                        loss, ce_loss, kl_loss = output[0]
-                        # Log to Tensorboard
-                        wandb.log({"train.ae_loss":loss})
-                        wandb.log({"train.ae_kl":kl_loss})
-                        # t_writer.add_scalar('ae_loss', loss, num_iters)
-                        # t_writer.add_scalar('ae_kl', kl_loss, num_iters)
 
                 st = time.time()
                 end = num_iters >= args.iterations
@@ -827,7 +785,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument('--data_type', type=str, default='t1', choices=['t' + str(i) for i in range(9)], help="t: type")
-    parser.add_argument('--model_type', type=str, default='cvae', choices=['cvae', 'ae_vae_fusion'])
+    parser.add_argument('--model_type', type=str, default='cvae', choices=['cvae'])
     parser.add_argument('--iterations', type=int, default=101640 * 2)  # wp 850001  wi 300001 ax 300001 yp 800001
     parser.add_argument('--dataset', type=str, default='wi', choices=['ax', 'yp', 'wp', 'wi'], help="Dataset to use for training")
     parser.add_argument('--warmup', type=int, default=10000,
@@ -858,7 +816,7 @@ if __name__ == "__main__":
     parser.add_argument('--fp16_opt_level', default='O1', type=str, required=False)
 
     # KL cost annealing, increase beta from beta_0 to 1 in beta_warmup steps
-    parser.add_argument('--beta_0', default=0.00, type=float)
+    parser.add_argument('--beta_0', default=0.01, type=float)
     parser.add_argument('--beta_warmup', type=int, default=25000)
     # cyc_vae parameters
     parser.add_argument('--cycle', type=int, default=101640)
@@ -872,7 +830,7 @@ if __name__ == "__main__":
     parser.add_argument('--learn_prior', action="store_true")
 
 
-    args = parser.parse_args('wp.debugmp --batch-sizes 8 --seq-lens 1024 '
+    args = parser.parse_args('wp.wae_gaussianEncoder --batch-sizes 8 --seq-lens 1024 '
                              '--add_attn --dataset wp'.split())
 
 
