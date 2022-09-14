@@ -69,6 +69,8 @@ def compute_loss(device, model, x_mask, x_tokens, y_mask, y_tokens, input_tokens
 
     ce_loss = loss_fn(logits.view(-1, num_logits), target_tokens.view(-1))
     reg_loss = reg_loss.mean()
+    reg_loss = torch.nn.functional.relu(reg_loss) # make sure divergence is positive
+
     loss = ce_loss.mean() + beta * reg_loss
 
     return loss, ce_loss, reg_loss
@@ -426,11 +428,11 @@ def main_worker(gpu, ngpus_per_node, args):
         ppl_word = round(math.exp(min(logp_sum / n_words, 100)), 3)
         div = reg_loss_sum / len(val_loader)
 
-        wandb.log({"valid/num_iters" : num_iters})
-        wandb.log({"valid/loss":loss_bpe})
-        wandb.log({"valid/ppl_bpe":ppl_bpe})
-        wandb.log({"valid/ppl_word":ppl_word})
-        wandb.log({"valid/divergence":div})
+        wandb.log({"valid/num_iters" : num_iters}, step=num_iters)
+        wandb.log({"valid/loss":loss_bpe}, step=num_iters)
+        wandb.log({"valid/ppl_bpe":ppl_bpe}, step=num_iters)
+        wandb.log({"valid/ppl_word":ppl_word}, step=num_iters)
+        wandb.log({"valid/divergence":div}, step=num_iters)
         logging.info('val loss    : %.4f' % loss_bpe)
         logging.info('val ppl_bpe : %.4f' % ppl_bpe)
         logging.info('val ppl_word: %.4f' % ppl_word)
@@ -563,7 +565,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # write samples to file
         samples_file = open(os.path.join(save_folder, 'generate-' + '%07d' % num_iters + '.txt'), 'w', encoding='utf8')
-
+        wandb_data = []
         # test_iter = iter(test_loader); x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask = next(test_iter)
         with tqdm(total=len(test_loader)) as pbar:
             for i_test, (x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask) in enumerate(
@@ -665,6 +667,14 @@ def main_worker(gpu, ngpus_per_node, args):
                     samples_file.write('\n' * 4)
                     samples_file.flush()
 
+                    wandb_data.append([tokenizer.decode(x_tokens[i, :][x_mask[i, :] == 1].tolist()), # prompt
+                                   storys_str[i], #true story
+                                   eff_samples[i][0] #generated story
+                                   ])
+        columns = ["prompt", "true_story", "generated_story"]
+        table = wandb.Table(data = wandb_data, columns = columns)
+        wandb.log({"example" : table}, step=num_iters)
+
         print('Test complete with %05d samples.' % n_samples)
         logging.info("Test complete with %05d samples.", n_samples)
         logging.info("Iteration completed: %d" % num_iters)
@@ -698,7 +708,7 @@ def main_worker(gpu, ngpus_per_node, args):
             for i, (x_mask, x_tokens, y_mask, y_tokens, input_tokens, target_tokens, mask) in enumerate(train_loader):
 
                 if num_iters % args.cycle >= args.cycle - args.beta_warmup:
-                    beta = min(1.0, beta + (1. - args.beta_0) / args.beta_warmup)
+                    beta = min(1.0, beta + (args.beta_1 - args.beta_0) / args.beta_warmup)
 
                 if not tuning_all and num_iters >= tuning_all_after_iters:
                     for name, parameter in VAE.named_parameters():
@@ -714,12 +724,12 @@ def main_worker(gpu, ngpus_per_node, args):
                     loss, ce_loss, reg_loss = output[-1]
                     lr = scheduler.get_last_lr()[0]
                     # Log to Tensorboard
-                    wandb.log({"train/loss":loss})
-                    wandb.log({"train/ppl":math.exp(min(ce_loss, 10))})
-                    wandb.log({"train/lr":lr})
-                    wandb.log({"train/iter_time":time.time() - st})
-                    wandb.log({"train/divergence":reg_loss})
-                    wandb.log({"train/beta":beta})
+                    wandb.log({"train/loss":loss}, step = num_iters)
+                    wandb.log({"train/ppl":math.exp(min(ce_loss, 10))}, step = num_iters)
+                    wandb.log({"train/lr":lr}, step = num_iters)
+                    wandb.log({"train/iter_time":time.time() - st}, step = num_iters)
+                    wandb.log({"train/divergence":reg_loss}, step = num_iters)
+                    wandb.log({"train/beta":beta}, step = num_iters)
                     # t_writer.add_scalar('loss', loss, num_iters)
                     # t_writer.add_scalar('ppl', math.exp(min(ce_loss, 10)), num_iters)
                     # t_writer.add_scalar('lr', lr, num_iters)
@@ -805,7 +815,7 @@ if __name__ == "__main__":
                         help='number of nodes for distributed training')
     parser.add_argument('--rank', default=0, type=int,
                         help='node rank for distributed training')
-    parser.add_argument('--dist-url', default='tcp://127.0.0.1:9999', type=str,
+    parser.add_argument('--dist-url', default='tcp://127.0.0.1:27999', type=str,
                         help='url used to set up distributed training')
     parser.add_argument('--dist-backend', default='nccl', type=str,
                         help='distributed backend')
@@ -816,7 +826,8 @@ if __name__ == "__main__":
     parser.add_argument('--fp16_opt_level', default='O1', type=str, required=False)
 
     # KL cost annealing, increase beta from beta_0 to 1 in beta_warmup steps
-    parser.add_argument('--beta_0', default=0.01, type=float)
+    parser.add_argument('--beta_0', default=0.1, type=float)
+    parser.add_argument('--beta_1', default=0.1, type = float) # for MMD use 10.0 / for KL use 1.0 
     parser.add_argument('--beta_warmup', type=int, default=25000)
     # cyc_vae parameters
     parser.add_argument('--cycle', type=int, default=101640)
@@ -827,10 +838,12 @@ if __name__ == "__main__":
     parser.add_argument('--attn_proj_vary', action="store_true")
     parser.add_argument('--wandb_pj_name', type=str, default="cvae_story", required=False)
 
+
+    # parser.add_argument('--use_deterministic_encoder', action="store_true")
     parser.add_argument('--learn_prior', action="store_true")
 
 
-    args = parser.parse_args('wp.wae_gaussianEncoder --batch-sizes 8 --seq-lens 1024 '
+    args = parser.parse_args('wp.waemmd_gaussianEncoder_beta0.1const --batch-sizes 8 --seq-lens 1024 '
                              '--add_attn --dataset wp'.split())
 
 
