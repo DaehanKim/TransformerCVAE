@@ -5,11 +5,14 @@ from nltk.tokenize.treebank import TreebankWordDetokenizer
 from rouge import Rouge
 from typing import List
 import string
+import numpy as np
 import re
+from evaluate import load
 
 STEMMER = snowball.SnowballStemmer("english")
 DETOK = TreebankWordDetokenizer()
 ENG_STOPWORDS = stopwords.words("english")
+BERTSCORE = load("bertscore")
 
 def syntactic_coverage(prompt_lst : List[str], story_lst : List[str]):
     '''story가 prompt 안에 있는 단어들로 얼마나 많이 구성되어 있는지 (rouge-1)
@@ -41,12 +44,17 @@ def syntactic_coverage(prompt_lst : List[str], story_lst : List[str]):
     
 
 
-def symantic_coverage(prompt: str, story: str):
+def semantic_coverage(prompt_lst : List[str], story_lst : List[str]):
     '''bert score를 이용한 symentic coverage 계산'''
-    pass
+    # predictions = ["hello there", "general kenobi"]
+    # references = ["hello there", "general kenobi"]
+    results = BERTSCORE.compute(predictions=story_lst, references=prompt_lst, lang="en")
+    prec = np.array(results['precision']).mean()
+    rec = np.array(results['recall']).mean()
+    f1 = 2*prec*rec/(prec+rec)
+    return {"p" : prec, "r" : rec, "f" : f1}
 
-
-def file_based_coverage(filename: str):
+def file_based_coverage(filename: str, method='sem'):
     '''cvae format에서 각 스토리 파싱해서 스코어 계산함'''
     reg = re.compile("[=]+ Outlines  [=]+|[=]+ Story [=]+|[=]+ SAMPLE \w [=]+|[=]+ Generated [=]+")
     with open(filename, "rt", encoding='utf8') as fin:
@@ -59,8 +67,14 @@ def file_based_coverage(filename: str):
         prompt_lst.append(split[i])
         true_story_lst.append(split[i+1])
         gen_story_lst.append(split[i+2])
-    gen_story_relevance = syntactic_coverage(prompt_lst, gen_story_lst)
-    true_story_relevance = syntactic_coverage(prompt_lst, true_story_lst)
+    if method == 'syn' :
+        metric = syntactic_coverage
+    elif method == 'sem' :
+        metric = semantic_coverage
+    else:
+        raise NotImplementedError(f"method {method} is not supported!") 
+    gen_story_relevance = metric(prompt_lst, gen_story_lst)
+    true_story_relevance = metric(prompt_lst, true_story_lst)
 
     print("generated story score :", gen_story_relevance)
     print("true story score :", true_story_relevance)
