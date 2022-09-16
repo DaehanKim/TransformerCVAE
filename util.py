@@ -7,6 +7,8 @@ import torch.multiprocessing as mp
 import numpy as np
 from data.util import *
 import copy
+from collections import deque
+from tqdm import trange
 
 
 def num_params(model):
@@ -93,3 +95,59 @@ def imq_kernel(X: torch.Tensor,
         stats += res1 - res2
 
     return stats
+
+### CNN/DM dataset handling
+
+def _add_missing_period(line):
+    END_TOKENS = [".", "!", "?", "...", "'", "`", '"', "\u2019", "\u2019", ")"]
+    if line.startswith("@highlight"):
+        return line
+    if line[-1] in END_TOKENS:
+        return line
+    return line + "."
+
+def process_story(raw_story):
+    """ Extract the story and summary from a story file.
+
+    Attributes:
+        raw_story (str): content of the story file as an utf-8 encoded string.
+
+    Raises:
+        IndexError: If the stoy is empty or contains no highlights.
+    """
+    nonempty_lines = list(filter(lambda x: len(x) != 0, [line.strip() for line in raw_story.split("\n")]))
+
+    # for some unknown reason some lines miss a period, add it
+    nonempty_lines = [_add_missing_period(line) for line in nonempty_lines]
+
+    # gather article lines
+    story_lines = []
+    lines = deque(nonempty_lines)
+    while True:
+        try:
+            element = lines.popleft()
+            if element.startswith("@highlight"):
+                break
+            story_lines.append(element)
+        except IndexError:
+            # if "@highlight" is absent from the file we pop
+            # all elements until there is None, raising an exception.
+            return story_lines, []
+
+    # gather summary lines
+    summary_lines = list(filter(lambda t: not t.startswith("@highlight"), lines))
+
+    return story_lines, summary_lines
+
+def debug_process_story():
+    import random
+    from glob import glob
+    paths = glob("data/cnndm/cnn/stories/*")
+    idx = random.randint(0, len(paths))
+    sample = open(paths[idx]).read()
+    story, summary = process_story(sample)
+    # print(f"story : {story[:100]}")
+    # print(f"summary : {summary}")
+    print(f"==== story_join ====\n{' '.join(story)} ")
+    print(f"==== summary_join ====\n{' '.join(summary)}")
+    
