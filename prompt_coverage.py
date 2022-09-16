@@ -8,6 +8,8 @@ import string
 import numpy as np
 import re
 from evaluate import load
+from transformers import AutoModelForCausalLM
+from transformers import AutoTokenizer
 
 STEMMER = snowball.SnowballStemmer("english")
 DETOK = TreebankWordDetokenizer()
@@ -42,13 +44,18 @@ def syntactic_coverage(prompt_lst : List[str], story_lst : List[str]):
     scores = rouge.get_scores(refined_prompt_lst, refined_story_lst, avg=True)
     return scores['rouge-1']
     
+def mutual_info_coverage(prompt_lst : List[str], story_lst : List[str]):
+    gpt2 = AutoModelForCausalLM.from_pretrained("gpt2", return_dict_in_generate=True)
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 
-def semantic_coverage(prompt_lst : List[str], story_lst : List[str]):
+
+
+def bertscore_coverage(prompt_lst : List[str], story_lst : List[str]):
     '''bert score를 이용한 symentic coverage 계산'''
     # predictions = ["hello there", "general kenobi"]
     # references = ["hello there", "general kenobi"]
-    results = BERTSCORE.compute(predictions=story_lst, references=prompt_lst, lang="en")
+    results = BERTSCORE.compute(predictions=story_lst, references=prompt_lst, lang="en", idf=True)
     prec = np.array(results['precision']).mean()
     rec = np.array(results['recall']).mean()
     f1 = 2*prec*rec/(prec+rec)
