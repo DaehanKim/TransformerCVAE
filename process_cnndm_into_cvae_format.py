@@ -17,9 +17,18 @@ if __name__ == "__main__":
         with open(path,'rt',encoding='utf8') as f:
             sample = f.read()
         story, summary = process_story(sample)
-        # story_rm_prefix = " ".join(story).split(" -- ")[1:]
-        # story_rm_prefix = " -- ".join(story_rm_prefix)
-        story_rm_prefix = " ".join(story)
+        
+        # remove article origin i.e. (CNN) -- 
+        story_rm_prefix = " ".join(story).split(" -- ")
+        story_rm_prefix = story_rm_prefix[1:] if len(story_rm_prefix) != 1 else story_rm_prefix
+        story_rm_prefix = " -- ".join(story_rm_prefix)
+
+        # remove remaining article origin i.e. new delhi(CNN) -> in case (CNN) is in the middle, text is much lost
+        # story_rm_prefix = story_rm_prefix.split("(CNN)")
+        # story_rm_prefix = story_rm_prefix[1:] if len(story_rm_prefix) != 1 else story_rm_prefix
+        # story_rm_prefix = "(CNN)".join(story_rm_prefix)
+
+        # story_rm_prefix = " ".join(story)
         summary = " ".join(summary)
 
         if not story_rm_prefix.strip(): 

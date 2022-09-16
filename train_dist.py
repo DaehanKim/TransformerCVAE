@@ -815,7 +815,7 @@ if __name__ == "__main__":
                         help='number of nodes for distributed training')
     parser.add_argument('--rank', default=0, type=int,
                         help='node rank for distributed training')
-    parser.add_argument('--dist-url', default='tcp://127.0.0.1:27999', type=str,
+    parser.add_argument('--dist-url', default='tcp://127.0.0.1:17999', type=str,
                         help='url used to set up distributed training')
     parser.add_argument('--dist-backend', default='nccl', type=str,
                         help='distributed backend')
@@ -843,8 +843,8 @@ if __name__ == "__main__":
     parser.add_argument('--learn_prior', action="store_true")
 
 
-    args = parser.parse_args('wp.waemmd_gaussianEncoder_beta0.1const --batch-sizes 8 --seq-lens 1024 '
-                             '--add_attn --dataset wp'.split())
+    args = parser.parse_args('cnndm.waemmd_gaussianEncoder_beta0.1const --batch-sizes 8 --seq-lens 1024 '
+                             '--add_attn --dataset cnndm'.split())
 
 
     # Each node is expected to have same number of GPUs

@@ -507,6 +507,69 @@ def prepare_dataset(data_dir, dataset_name, tokenizer, train_bsz, train_seq_len,
                                            drop_last=True,
                                            num_workers=num_workers,
                                            collate_fn=test_collate_fn) if d_test else None)
+    elif dataset_name == 'cnndm':
+        train_collate_fn = collate_fn
+        val_collate_fn = collate_fn
+        test_collate_fn = collate_fn
+
+        if make_train:
+            train_preproc = Preprocessor(tokenizer, train_seq_len, data_type)
+            d_train = PromptDataset(
+                os.path.join(data_dir, 'cnndm/train.cnndm_source'),
+                os.path.join(data_dir, 'cnndm/train.cnndm_target'),
+                train_preproc)
+            if data_type == 't7' or data_type == 't8':
+                d_train = [t for lt in d_train for t in lt]
+            print('Train dataset size', len(d_train))
+            sampler = None
+            if local_rank is not None: 
+                print(f"DDP -> using distributed sampler... rank {local_rank}")
+                sampler = DistributedSampler(
+                    d_train,
+                    num_replicas = 2,
+                    rank = local_rank,
+                    shuffle=True
+                )
+            loaders.append(data.DataLoader(d_train,
+                                            sampler = sampler,
+                                        #    sampler=DistributedSampler(d_train) if distributed else None,
+                                           batch_size=train_bsz,
+                                           pin_memory=True,
+                                           drop_last=True,
+                                           num_workers=num_workers,
+                                           collate_fn=train_collate_fn) if d_train else None)
+        if make_val:
+            val_preproc = Preprocessor(tokenizer, val_seq_len, data_type)
+            d_val = PromptDataset(
+                os.path.join(data_dir, 'cnndm/valid.cnndm_source'),
+                os.path.join(data_dir, 'cnndm/valid.cnndm_target'),
+                val_preproc)
+            if data_type == 't7' or data_type == 't8':
+                d_val = [t for lt in d_val for t in lt]
+            print('Val dataset size', len(d_val))
+            loaders.append(data.DataLoader(d_val,
+                                           # sampler=DistributedSampler(d_val),
+                                           batch_size=val_bsz,
+                                           pin_memory=True,
+                                           drop_last=True,
+                                           num_workers=num_workers,
+                                           collate_fn=val_collate_fn) if d_val else None)
+        if make_test:
+            test_preproc = Preprocessor(tokenizer, test_seq_len, data_type)
+            d_test = PromptDataset(
+                os.path.join(data_dir, 'cnndm/test.cnndm_source'),
+                os.path.join(data_dir, 'cnndm/test.cnndm_target'),
+                test_preproc)
+            if data_type == 't7' or data_type == 't8':
+                d_test = [t for lt in d_test for t in lt]
+            print('Test dataset size', len(d_test))
+            loaders.append(data.DataLoader(d_test,
+                                           # sampler=DistributedSampler(d_val),
+                                           batch_size=test_bsz,
+                                           pin_memory=True,
+                                           drop_last=True,
+                                           num_workers=num_workers,
+                                           collate_fn=test_collate_fn) if d_test else None)
     elif dataset_name == 'wi':
         train_collate_fn = collate_fn
         val_collate_fn = collate_fn
